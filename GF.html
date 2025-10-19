@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Регулярное выражение → производящая функция → рекурренты</title>
+<style>
+  body {
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    margin: 18px;
+    color: #e0e0e0;
+    background-color: #121212;
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin-bottom: 0.5rem;
+    color: #ffffff;
+  }
+  .box {
+    border: 1px solid #333;
+    padding: 12px;
+    border-radius: 10px;
+    margin-bottom: 14px;
+    background: #1e1e1e;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  }
+  textarea {
+    width: 93%;
+    height: 70px;
+    font-family: monospace;
+    font-size: 14px;
+    padding: 9px;
+    margin-top: 13px;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #444;
+    border-radius: 6px;
+  }
+  input[type="number"] {
+    width: 3rem;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #e0e0e0;
+    border-radius: 6px;
+    padding: 4px 6px;
+  }
+  button {
+    background: #3b82f6;
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s ease-in-out, transform 0.1s;
+  }
+  button:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+  }
+  pre {
+    background: #181818;
+    color: #cfcfcf;
+    padding: 10px;
+    border-radius: 8px;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
+  .flex {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .small {
+    font-size: 0.9rem;
+    color: #aaa;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+  td, th {
+    border: 1px solid #333;
+    padding: 6px;
+    text-align: left;
+  }
+  th {
+    background: #2a2a2a;
+    color: #fff;
+  }
+  code.k {
+    background: #333a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #7dd3fc;
+  }
+</style>
+</head>
+<body>
+  <h1>Регулярное выражение → </h1><h1> → производящая функция</h1>
+  <div class="box">
+    <div class="small">Правила синтаксиса:</div>
+    <ul>
+      <li>Алфавит — любые символы кроме: <code class="k">+</code>, <code class="k">*</code>, <code class="k">(</code>, <code class="k">)</code>, <code class="k">×</code> и пустого слова <code class="k">λ</code></li>
+      <li>Объединение — <code class="k">A+B</code></li>
+      <li>Конкатенация — <code class="k">A×B</code> или <code class="k">AB</code></li>
+      <li>Итерация — <code class="k">A*</code></li>
+    </ul>
+  </div>
+
+  <div class="box">
+    <label><strong>Введите регулярное выражение</strong></label>
+    <textarea id="re" placeholder="Например, (000+1)*"></textarea>
+    <div class="flex" style="margin-top:8px;">
+      <label><strong>Производящая функция:</strong></label>
+      <label>F(x) = w₀ + w₁ x + w₂ x² + ...</label>
+      <button id="go">Вычислить wₙ</button>
+      <label class="small">Показать первые n = <input id="count" type="number" min="1" value="11"> штук</label>
+      <label class="small">Упрощать многочлены <input id="simplify" type="checkbox" checked></label>
+    </div>
+  </div>
+
+  <div id="out"></div>
+
+  
+  
+  <script>
+/*
+  Parser + rational GF builder.
+  Полезные замечания:
+   - Каждый символ из алфавита даёт GF = x (т.е. один символ длины 1).
+   - lambda (λ) даёт GF = 1.
+   - union A+B -> sum
+   - concat A B -> product (convolution)
+   - star A* -> 1/(1 - A'), где A' = A - a0, a0 = [contains empty word ? 1 : 0]
+     (мы удаляем пустые слова из A перед итерацией, т.к. при расчёте множества факторы λ не влияют)
+  Мы представляем рационал p/q как объекты с poly p и poly q (массивы коэффициентов от меньших степеней).
+  Вспомогательные операции над многочленами: add, mul, sub, scalar mul, gcd simplification.
+*/
+
+// --- Полиномы: массивы целых чисел [c0, c1, c2, ...]
+function trim(p){
+  while(p.length>1 && p[p.length-1]===0) p.pop();
+  return p;
+}
+function polyFromConst(n){
+  return [n];
+}
+function polyX(){ return [0,1]; } // x
+function polyAdd(a,b){
+  const n = Math.max(a.length,b.length);
+  const r = new Array(n).fill(0);
+  for(let i=0;i<n;i++){ r[i] = (a[i]||0) + (b[i]||0); }
+  return trim(r);
+}
+function polySub(a,b){
+  const n = Math.max(a.length,b.length);
+  const r = new Array(n).fill(0);
+  for(let i=0;i<n;i++){ r[i] = (a[i]||0) - (b[i]||0); }
+  return trim(r);
+}
+function polyMul(a,b){
+  const r = new Array(a.length+b.length-1).fill(0);
+  for(let i=0;i<a.length;i++) for(let j=0;j<b.length;j++) r[i+j] += a[i]*b[j];
+  return trim(r);
+}
+function polyScale(a, c){
+  return trim(a.map(v=>v*c));
+}
+function polyEqZero(a){ return a.length===0 || (a.length===1 && a[0]===0); }
+function polyToString(a){
+  trim(a);
+  if(a.length===0) return "0";
+  const parts = [];
+  for(let i=a.length-1;i>=0;i--){
+    const v=a[i];
+    if(v===0) continue;
+    let s = (Math.abs(v) === 1 && i>0) ? (v<0? "-" : "") : String(v);
+    if(i>=1){
+      s += (i===1? "x" : "x^"+i);
+    }
+    parts.push(s);
+  }
+  // join with +/-
+  let out = parts[0] || "0";
+  for(let k=1;k<parts.length;k++){
+    const s = parts[k];
+    if(s.startsWith("-")) out += " - " + s.slice(1);
+    else out += " + " + s;
+  }
+  return out;
+}
+// gcd for integers
+function igcd(a,b){
+  a=Math.abs(a); b=Math.abs(b);
+  if(a===0) return b; if(b===0) return a;
+  while(b){ const t=a%b; a=b; b=t; }
+  return a;
+}
+function polyGcdCoeffs(a){
+  let g=0;
+  for(let v of a) g = igcd(g, v);
+  return g;
+}
+function simplifyRational(r){
+  // divide common gcd of all coefficients of p and q
+  const p=r.p, q=r.q;
+  const all = p.concat(q);
+  const g = polyGcdCoeffs(all);
+  if(g>1){
+    r.p = p.map(v => v/g);
+    r.q = q.map(v => v/g);
+  }
+  // ensure q leading coefficient positive
+  if(r.q[r.q.length-1] < 0){
+    r.p = r.p.map(v=>-v);
+    r.q = r.q.map(v=>-v);
+  }
+  return r;
+}
+
+// rational ops: {p:poly, q:poly}
+function ratAdd(A,B){
+  const p = polyAdd(polyMul(A.p,B.q), polyMul(B.p,A.q));
+  const q = polyMul(A.q,B.q);
+  return simplifyRational({p,q});
+}
+function ratMul(A,B){
+  const p = polyMul(A.p,B.p);
+  const q = polyMul(A.q,B.q);
+  return simplifyRational({p,q});
+}
+function ratSub(A,B){
+  const p = polySub(polyMul(A.p,B.q), polyMul(B.p,A.q));
+  const q = polyMul(A.q,B.q);
+  return simplifyRational({p,q});
+}
+function ratFromPoly(p){ return {p:trim(p.slice()), q:[1]}; }
+
+// Evaluate polynomial at x=0 => constant term
+function polyConst(a){ return (a.length>0)? a[0]:0; }
+
+// --- Parser
+function tokenize(s){
+  const tokens=[];
+  for(let i=0;i<s.length;i++){
+    const ch = s[i];
+    if(ch===' '||ch==='\t'||ch==='\n'||ch==='\r') continue;
+    if(ch==='+'||ch==='*'||ch==='('||ch===')' || ch==='×'){
+      tokens.push({type:ch, val:ch});
+    } else {
+      // symbol (could be multichar? we'll treat each character as a symbol; but allow λ one-char)
+      // To support multi-digit symbol like "a1" one would need quotes — not supported.
+      tokens.push({type:'sym', val:ch});
+    }
+  }
+  return tokens;
+}
+
+// Build AST with precedence: union lowest, concat middle, star highest (postfix)
+// Grammar: union := concat ( + concat )*
+// concat := repeatable ( repeatable )*   (implicit concatenation)
+// repeatable := primary ( * )*
+// primary := sym | λ | ( union )
+function parseRE(s){
+  const tokens = tokenize(s);
+  let i=0;
+  function peek(){ return tokens[i]||null; }
+  function consume(){ return tokens[i++]||null; }
+  function parsePrimary(){
+    const t = peek();
+    if(!t) throw "Ожидался символ или '('";
+    if(t.type==='('){
+      consume();
+      const node = parseUnion();
+      if(!peek() || peek().type!==')') throw "Ожидалась ')'";
+      consume();
+      return node;
+    }
+    if(t.type==='sym'){
+      consume();
+      if(t.val==='λ') return {type:'lambda'};
+      return {type:'sym', val:t.val};
+    }
+    throw "Неправильный символ: "+t.val;
+  }
+  function parseRepeatable(){
+    let node = parsePrimary();
+    while(peek() && peek().type==='*'){
+      consume();
+      node = {type:'star', child:node};
+    }
+    return node;
+  }
+  function parseConcat(){
+    // parse sequence of repeatable nodes while next token can start a factor
+    let nodes = [];
+    let first = parseRepeatable();
+    nodes.push(first);
+    while(true){
+      const t = peek();
+      if(!t) break;
+      // concatenation if next token begins a primary: sym or '(' or 'λ'
+      if(t.type==='sym' || t.type==='('){
+        nodes.push(parseRepeatable());
+        continue;
+      }
+      // also allow explicit '×' token
+      if(t.type==='×'){
+        consume(); // consume ×
+        const nxt = parseRepeatable();
+        nodes.push(nxt);
+        continue;
+      }
+      break;
+    }
+    if(nodes.length===1) return nodes[0];
+    return {type:'concat', list:nodes};
+  }
+  function parseUnion(){
+    let left = parseConcat();
+    while(peek() && peek().type==='+'){
+      consume();
+      const right = parseConcat();
+      left = {type:'union', a:left, b:right};
+    }
+    return left;
+  }
+
+  const ast = parseUnion();
+  if(i < tokens.length) throw "Не удалось разобрать всё выражение — остаток: "+JSON.stringify(tokens.slice(i));
+  return ast;
+}
+
+// Compute nullable and rational GF for node
+function computeNode(node){
+  // returns { nullable: bool, rat: {p,q} }
+  if(node.type==='lambda') return {nullable:true, rat:ratFromPoly(polyFromConst(1))};
+  if(node.type==='sym') return {nullable:false, rat:ratFromPoly(polyX())};
+  if(node.type==='union'){
+    const A = computeNode(node.a);
+    const B = computeNode(node.b);
+    const nullable = A.nullable || B.nullable;
+    const rat = ratAdd(A.rat, B.rat);
+    // p/q may be simplified already
+    return {nullable, rat};
+  }
+  if(node.type==='concat'){
+    // iterate multiplication
+    let nullable = true;
+    let rat = {p:[1], q:[1]};
+    for(const c of node.list){
+      const r = computeNode(c);
+      nullable = nullable && r.nullable;
+      rat = ratMul(rat, r.rat);
+    }
+    return {nullable, rat};
+  }
+  if(node.type==='star'){
+    const A = computeNode(node.child);
+    // a0 = indicator of empty word in A: 0 or 1 (but we compute using p(0)/q(0))
+    const p = A.rat.p, q = A.rat.q;
+    const p0 = polyConst(p||[0]) || 0;
+    const q0 = polyConst(q||[1]) || 1;
+    // a0 = p0/q0, should be integer 0 or 1 for languages; compute integer division if exact
+    let a0 = 0;
+    if(q0!==0 && p0 % q0 === 0) a0 = p0 / q0;
+    // Now A' = A - a0
+    // A' = (p - a0*q)/q
+    const p_minus = polySub(p, polyScale(q, a0));
+    // star = 1/(1 - A') = q / ( (1+a0)q - p )
+    const numerator = q.slice();
+    const denominator = polySub(polyScale(q, 1 + a0), p);
+    if(polyEqZero(denominator)) {
+      // degenerate: denominator 0 => star -> undefined as rational; but for regular languages this shouldn't happen.
+      throw "Ошибка: знаменатель при звезде стал нулевым (вложенная регулярка даёт 1/(0)).";
+    }
+    const rat = simplifyRational({p: numerator, q: denominator});
+    return {nullable: true, rat};
+  }
+  throw "Неизвестный узел: "+JSON.stringify(node);
+}
+
+// Solve coefficients w_n from (sum w_n x^n) q(x) = p(x)
+// q(x) = sum_{k=0..d} q_k x^k
+// For n>=0: sum_{k=0..min(n,d)} q_k w_{n-k} = p_n
+// => w_n = (p_n - sum_{k=1..min(n,d)} q_k w_{n-k}) / q_0
+function computeRecurrence(rat, showCount){
+  const p = rat.p.slice(); const q = rat.q.slice();
+  trim(p); trim(q);
+  const deg_q = q.length - 1;
+  const q0 = (q[0]||0);
+  // build p_n array up to showCount + deg_q to have p_n available
+  const maxN = showCount + deg_q + 5;
+  const p_n = new Array(maxN).fill(0);
+  for(let i=0;i<p.length && i<maxN;i++) p_n[i] = p[i];
+  // Solve for w0..w_{maxN-1} iteratively if q0 != 0
+  const w = new Array(maxN).fill(null);
+  if(q0 === 0){
+    // cannot divide by q0; present system-of-equations description (triangular possibly shifted)
+    return {ok:false, reason:"Свободный член q(0) = 0. Тогда прямое выражение w_n = ... с делением на q0 невозможно. Нужно решить систему уравнений коэффициентов напрямую." ,
+            p_n, q};
+  } else {
+    for(let n=0;n<maxN;n++){
+      let s = 0;
+      for(let k=1;k<=deg_q;k++){
+        if(k>n) break;
+        s += (q[k]||0) * (w[n-k]||0);
+      }
+      const pn = p_n[n] || 0;
+      const wn = (pn - s) / q0;
+      // Expect integer result (counts)
+      w[n] = wn;
+    }
+    // Build symbolic recurrence string
+    // w_n = (p_n - sum_{k=1..d} q_k w_{n-k}) / q0
+    return {ok:true, p, q, w, recurrence:{
+      q0,qk:q.slice(), deg_q, formula: function(){
+        const parts = [];
+        for(let k=1;k<=deg_q;k++){
+          const coeff = q[k]||0;
+          if(coeff===0) continue;
+          parts.push((coeff>0? "+"+coeff: String(coeff)) + "*w_{n-"+k+"}");
+        }
+        const sum = parts.length? parts.join(' '): "0";
+        return `w_n = (p_n - (${sum})) / ${q0}`;
+      }()
+    }};
+  }
+}
+
+// UI glue
+document.getElementById('go').addEventListener('click', ()=>{
+  const s = document.getElementById('re').value.trim();
+  const count = Math.max(1, parseInt(document.getElementById('count').value) || 20);
+  const simplify = document.getElementById('simplify').checked;
+  const out = document.getElementById('out');
+  out.innerHTML = "";
+  if(!s){ out.innerHTML = "<div class='box'><em>Введите регулярное выражение</em></div>"; return;}
+  try {
+    const ast = parseRE(s);
+    const res = computeNode(ast);
+    let rat = res.rat;
+    if(simplify) simplifyRational(rat);
+    // show p/q
+    const pstr = polyToString(rat.p);
+    const qstr = polyToString(rat.q);
+    const nullable = res.nullable;
+    const rec = computeRecurrence(rat, count);
+    let html = "";
+    html += `<div class="box"><strong>AST:</strong><pre>${JSON.stringify(ast,null,2)}</pre></div>`;
+    html += `<div class="box"><strong>nullable (содержит пустое слово?):</strong> ${nullable ? "да" : "нет"}</div>`;
+    html += `<div class="box"><strong>Производящая функция:</strong><div class="small">F(x) = p(x) / q(x)</div><pre>p(x) = ${pstr}\nq(x) = ${qstr}\n\nF(x) = (${pstr}) / (${qstr})</pre></div>`;
+    if(!rec.ok){
+      html += `<div class="box"><strong>Нельзя получить однозначный рекуррент с делением на q0:</strong>\n<pre>${rec.reason}</pre>\nПопробуйте преобразовать выражение (например, убрать случаи, дающие q(0)=0) или изучить систему уравнений вручную.</div>`;
+    } else {
+      html += `<div class="box"><strong>Рекуррентная формула (символически):</strong>\n<pre>${rec.recurrence.formula}</pre></div>`;
+      // show initial system: for n=0..deg_q-1, triangular equations
+      const degq = rec.recurrence.deg_q;
+      // show first few coefficients
+      html += `<div class="box"><strong>Первые ${count} значений w_n:</strong>\n<table><tr><th>n</th><th>w_n</th></tr>`;
+      for(let n=0;n<count;n++){
+        html += `<tr><td>${n}</td><td>${rec.w[n]}</td></tr>`;
+      }
+      html += `</table></div>`;
+      // show how initial w0..w_{d-1} получаются (покажем уравнения)
+      html += `<div class="box"><strong>Уравнения по коэффициентам (первые):</strong>\n<pre>`;
+      for(let n=0;n<=Math.max(degq, Math.min(count-1, degq+3)); n++){
+        // sum_{k=0..min(n,d)} q_k w_{n-k} = p_n
+        const terms = [];
+        for(let k=0;k<=Math.min(n,degq);k++){
+          const qk = rec.q[k]||0;
+          const idx = n-k;
+          terms.push(`${qk}*w_${idx}`);
+        }
+        const pn = (rec.p[n]||0);
+        html += `${terms.join(" + ")} = ${pn}\n`;
+      }
+      html += `</pre></div>`;
+      html += `<div class="box small"><strong>Замечание:</strong> Помните, операции над производящими функциями корректны, когда составные части объединения не пересекаются, а конкатенации/итерации раскладываются на компоненты однозначно (в знаменателе свободный коэффициент ≠ 0)</div>`;
+    }
+    out.innerHTML = html;
+  } catch(e){
+    out.innerHTML = `<div class="box" style="color:#800"><strong>Ошибка парсинга/вычисления:</strong><pre>${String(e)}</pre></div>`;
+  }
+});
+</script>
+</body>
+</html>
